@@ -26,6 +26,27 @@ cp deploy/nginx/marketing.exora.solutions.conf /srv/gateway/nginx/sites/
 docker exec gateway nginx -t && docker exec gateway nginx -s reload
 ```
 
+## Claude Code login
+
+The Docker image includes the native Claude Code CLI. Web and worker share the
+`claude_home` Docker volume for account login state. Keep that volume when
+recreating containers.
+
+From an interactive server terminal:
+
+```bash
+cd /srv/apps/marketing
+docker compose exec web claude auth login
+docker compose exec web claude auth status
+docker compose exec worker claude auth status
+```
+
+Open the login URL in your browser and follow the terminal instructions. Refresh
+Settings after login. Set `EXORA_ROUTER_PROVIDER=claude` in `.env` and recreate
+the containers to use this login for assistant routing as well. The optional
+`EXORA_ROUTER_MODEL` defaults to `haiku`. This uses your Claude account; no Anthropic API key is
+required. Both services use the same account and its usage allowance.
+
 ## 4. Meta App Dashboard
 
 - **OAuth redirect:** `https://marketing.exora.solutions/api/auth/meta/callback`

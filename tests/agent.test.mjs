@@ -325,10 +325,10 @@ test('Claude disconnected: talk asks to connect, and a read still answers',async
  res=await turn({message:"what's waiting for review?"});
  assert.match(res.result.text,/waiting for review/);
 });
-test('Routing is unavailable without a key, and there is no tool-picking fallback',async()=>{
- setJevStub(null);setOpenRouterOff(true);const saved=process.env.TYPESAFE_API_KEY;delete process.env.TYPESAFE_API_KEY;
+test('Routing is unavailable without a configured provider, and there is no tool-picking fallback',async()=>{
+ setJevStub(null);setOpenRouterOff(true);const saved=process.env.TYPESAFE_API_KEY,provider=process.env.EXORA_ROUTER_PROVIDER;delete process.env.TYPESAFE_API_KEY;delete process.env.EXORA_ROUTER_PROVIDER;
  try{const res=await turn({message:'hello'});assert.match(res.result.text,/Routing is unavailable/);}
- finally{setOpenRouterOff(false);if(saved)process.env.TYPESAFE_API_KEY=saved;}
+ finally{setOpenRouterOff(false);if(saved)process.env.TYPESAFE_API_KEY=saved;if(provider!==undefined)process.env.EXORA_ROUTER_PROVIDER=provider;}
 });
 test('Daily turn limit is enforced',async()=>{
  const used=(await q(`SELECT count(*)::int n FROM agent_messages m JOIN agent_threads t ON t.id=m.thread_id WHERE t.user_id=(SELECT id FROM users WHERE email='admin@exora.local') AND m.role='user' AND m.created_at>=(date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`)).rows[0].n;

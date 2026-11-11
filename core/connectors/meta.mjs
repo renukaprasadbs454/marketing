@@ -16,20 +16,32 @@ export function metaRedirectUri(req){return process.env.META_REDIRECT_URI||(req?
 function appId(){return String(process.env.META_APP_ID||'');}
 function appSecret(){return String(process.env.META_APP_SECRET||'');}
 function actId(raw){const s=String(raw||'').replace(/^act_/,'');if(!/^\d+$/.test(s))fail('Choose a Meta ad account');return 'act_'+s;}
+function normAct(raw){const s=String(raw||'').replace(/^act_/,'');return /^\d+$/.test(s)?'act_'+s:'';}
 
-export function accountPublic(row){
- if(!row)return {status:'not_connected'};
+export async function globalMetaRow(){
+ return (await q("SELECT * FROM connector_accounts WHERE provider='meta' AND client_id IS NULL")).rows[0]||null;
+}
+export async function clientMetaLink(clientId){
+ if(!clientId)return null;
+ return (await q('SELECT * FROM client_meta_links WHERE client_id=$1',[clientId])).rows[0]||null;
+}
+
+/** Public Meta status: workspace connection + optional per-client assignment. */
+export function accountPublic(row,link=null){
+ if(!row)return {status:'not_connected',workspace:true,assigned:false};
  const m=row.meta&&typeof row.meta==='object'?row.meta:{};
  return {
   status:row.status,
-  ad_account_id:m.ad_account_id||null,
-  ad_account_name:m.ad_account_name||null,
+  workspace:true,
+  assigned:!!(link&&link.ad_account_id),
+  ad_account_id:link?.ad_account_id||null,
+  ad_account_name:link?.ad_account_name||null,
   ad_accounts:Array.isArray(m.ad_accounts)?m.ad_accounts:[],
-  page_id:m.page_id||null,
-  page_name:m.page_name||null,
+  page_id:link?.page_id||null,
+  page_name:link?.page_name||null,
   pages:Array.isArray(m.pages)?m.pages:[],
-  whatsapp_phone_id:m.whatsapp_phone_id||null,
-  whatsapp_display:m.whatsapp_display||null,
+  whatsapp_phone_id:link?.whatsapp_phone_id||null,
+  whatsapp_display:link?.whatsapp_display||null,
   whatsapp_phones:Array.isArray(m.whatsapp_phones)?m.whatsapp_phones:[],
   token_expires_at:row.token_expires_at||null,
   updated_at:row.updated_at||null,
@@ -87,36 +99,25 @@ async function loadCatalog(token){
  return {ad_accounts,pages:pageList,whatsapp_phones};
 }
 
-function pickDefaults(cat,prev={}){
- const ad=cat.ad_accounts.find(a=>a.id===(prev.ad_account_id||''))||(cat.ad_accounts.length===1?cat.ad_accounts[0]:null);
- const page=cat.pages.find(p=>p.id===(prev.page_id||''))||(cat.pages.length===1?cat.pages[0]:null);
- const phone=cat.whatsapp_phones.find(p=>p.id===(prev.whatsapp_phone_id||''))||(cat.whatsapp_phones.length===1?cat.whatsapp_phones[0]:null);
- return {
-  ...cat,
-  ad_account_id:ad?.id||null,ad_account_name:ad?.name||null,
-  page_id:page?.id||null,page_name:page?.name||null,
-  whatsapp_phone_id:phone?.id||null,whatsapp_display:phone?.display||null,
- };
-}
-
-async function upsertPending(clientId,userId){
+async function upsertPending(userId){
  const state=crypto.randomBytes(24).toString('hex');
- const rid=id();
- await q(`INSERT INTO connector_accounts(id,client_id,provider,status,oauth_state,oauth_expires_at,meta)
-  VALUES($1,$2,'meta','pending',$3,now()+interval '20 minutes','{}')
-  ON CONFLICT(client_id,provider) DO UPDATE SET status='pending',oauth_state=excluded.oauth_state,oauth_expires_at=excluded.oauth_expires_at,updated_at=now()`,
-  [rid,clientId,state]);
- await audit({query:q},{id:userId},clientId,'meta:oauth-start',null,{});
+ const existing=await globalMetaRow();
+ if(existing){
+  await q(`UPDATE connector_accounts SET status='pending',oauth_state=$2,oauth_expires_at=now()+interval '20 minutes',updated_at=now() WHERE id=$1`,
+   [existing.id,state]);
+ }else{
+  await q(`INSERT INTO connector_accounts(id,client_id,provider,status,oauth_state,oauth_expires_at,meta)
+   VALUES($1,NULL,'meta','pending',$2,now()+interval '20 minutes','{}')`,[id(),state]);
+ }
+ await audit({query:q},{id:userId},null,'meta:oauth-start',null,{scope:'workspace'});
  return state;
 }
 
 export async function handleMetaStart(req,url,user){
  if(!metaConfigured())fail('Meta app credentials are not set on the server',503);
- const {access}=await import('../auth/index.mjs');
- const client=await access(user,url.searchParams.get('client'));
  const {authorize}=await import('../auth/index.mjs');
  authorize(user);
- const state=await upsertPending(client.id,user.id);
+ const state=await upsertPending(user.id);
  const redirect=metaRedirectUri(req);
  const dest=new URL('https://www.facebook.com/'+metaVersion()+'/dialog/oauth');
  dest.searchParams.set('client_id',appId());
@@ -133,11 +134,11 @@ export async function handleMetaCallback(req,url){
  const err=url.searchParams.get('error');
  const code=url.searchParams.get('code');
  const state=url.searchParams.get('state');
- if(err)return bounce('/ads?meta=denied');
- if(!code||!state||!/^[0-9a-f]{32,64}$/i.test(state))return bounce('/ads?meta=invalid');
- if(!metaConfigured())return bounce('/ads?meta=config');
- const row=(await q("SELECT * FROM connector_accounts WHERE oauth_state=$1 AND oauth_expires_at>now()",[state])).rows[0];
- if(!row)return bounce('/ads?meta=invalid');
+ if(err)return bounce('/settings?meta=denied');
+ if(!code||!state||!/^[0-9a-f]{32,64}$/i.test(state))return bounce('/settings?meta=invalid');
+ if(!metaConfigured())return bounce('/settings?meta=config');
+ const row=(await q("SELECT * FROM connector_accounts WHERE oauth_state=$1 AND oauth_expires_at>now() AND client_id IS NULL",[state])).rows[0];
+ if(!row)return bounce('/settings?meta=invalid');
  try{
   const redirect=metaRedirectUri(req);
   const shortTok=await exchangeCode(code,redirect);
@@ -145,17 +146,21 @@ export async function handleMetaCallback(req,url){
   const longTok=await exchangeLongLived(shortTok.access_token).catch(()=>shortTok);
   const token=longTok.access_token||shortTok.access_token;
   const expires=Number(longTok.expires_in||shortTok.expires_in||5184000);
-  const cat=pickDefaults(await loadCatalog(token),row.meta||{});
+  const cat=await loadCatalog(token);
   const enc=encryptSecret(token);
   await q(`UPDATE connector_accounts SET status='connected',token_enc=$2,token_expires_at=now()+($3||' seconds')::interval,
     oauth_state=NULL,oauth_expires_at=NULL,meta=$4,updated_at=now() WHERE id=$1`,
     [row.id,enc,String(expires),JSON.stringify(cat)]);
-  await audit({query:q},null,row.client_id,'meta:connected',null,{ad_accounts:cat.ad_accounts.length,pages:cat.pages.length});
-  return bounce('/ads?meta=connected');
+  // Drop assignments that are no longer in the catalog
+  const ids=(cat.ad_accounts||[]).map(a=>a.id);
+  if(ids.length)await q('DELETE FROM client_meta_links WHERE NOT (ad_account_id = ANY($1::text[]))',[ids]);
+  else await q('DELETE FROM client_meta_links');
+  await audit({query:q},null,null,'meta:connected',null,{scope:'workspace',ad_accounts:cat.ad_accounts.length,pages:cat.pages.length});
+  return bounce('/settings?meta=connected');
  }catch(e){
   await q("UPDATE connector_accounts SET status='error',oauth_state=NULL,oauth_expires_at=NULL,updated_at=now() WHERE id=$1",[row.id]);
-  await audit({query:q},null,row.client_id,'meta:oauth-failed',null,{reason:String(e.message||'token').slice(0,200)});
-  return bounce('/ads?meta=token');
+  await audit({query:q},null,null,'meta:oauth-failed',null,{reason:String(e.message||'token').slice(0,200)});
+  return bounce('/settings?meta=token');
  }
 }
 
@@ -183,16 +188,17 @@ export async function handleMetaWebhook(req,url){
  const entries=Array.isArray(payload.entry)?payload.entry:[];
  for(const entry of entries.slice(0,50)){
   const account=String(entry.id||'');
-  const linked=account?(await q("SELECT client_id FROM connector_accounts WHERE provider='meta' AND meta->>'ad_account_id' IN ($1,$2)",[account,'act_'+account])).rows[0]:null;
+  const act=normAct(account);
+  const linked=act?(await q('SELECT client_id FROM client_meta_links WHERE ad_account_id IN ($1,$2)',[act,account])).rows[0]:null;
   await q('INSERT INTO connector_events(client_id,provider,kind,payload) VALUES($1,$2,$3,$4)',[linked?.client_id||null,'meta','webhook',entry]);
  }
  return json({ok:true});
 }
 
-async function connectedRow(clientId){
- const row=(await q("SELECT * FROM connector_accounts WHERE client_id=$1 AND provider='meta'",[clientId])).rows[0];
+async function connectedWorkspace(){
+ const row=await globalMetaRow();
  if(!row||row.status!=='connected'||!row.token_enc){
-  const e=new Error('META_NOT_CONNECTED: Connect Meta Ads for this client first.');e.status=409;throw e;
+  const e=new Error('META_NOT_CONNECTED: Connect Meta Ads for the workspace first (Settings → Accounts).');e.status=409;throw e;
  }
  if(row.token_expires_at&&new Date(row.token_expires_at).getTime()<Date.now()){
   await q("UPDATE connector_accounts SET status='expired',updated_at=now() WHERE id=$1",[row.id]);
@@ -201,43 +207,82 @@ async function connectedRow(clientId){
  return row;
 }
 
+async function connectedForClient(clientId){
+ const row=await connectedWorkspace();
+ const link=await clientMetaLink(clientId);
+ if(!link?.ad_account_id){
+  const e=new Error('META_ACCOUNT_REQUIRED: Assign a Meta ad account to this client first.');e.status=409;throw e;
+ }
+ return {row,link};
+}
+
 async function tokenFor(row){return decryptSecret(row.token_enc);}
 
 export async function selectMetaField(user,client,field,value){
- const row=await connectedRow(client.id);
- const meta={...(row.meta||{})};
+ const row=await connectedWorkspace();
+ const meta=row.meta&&typeof row.meta==='object'?row.meta:{};
+ const prev=await clientMetaLink(client.id)||{};
+ let next={
+  ad_account_id:prev.ad_account_id||null,
+  ad_account_name:prev.ad_account_name||null,
+  page_id:prev.page_id||null,
+  page_name:prev.page_name||null,
+  whatsapp_phone_id:prev.whatsapp_phone_id||null,
+  whatsapp_display:prev.whatsapp_display||null,
+ };
  if(field==='ad_account_id'){
-  const acc=(meta.ad_accounts||[]).find(a=>a.id===value||a.id==='act_'+String(value).replace(/^act_/,''));
-  if(!acc)fail('That ad account is not on this Meta connection');
-  meta.ad_account_id=acc.id;meta.ad_account_name=acc.name;
+  if(!value){
+   await tx(async c=>{
+    await c.query('DELETE FROM client_meta_links WHERE client_id=$1',[client.id]);
+    await audit(c,user,client.id,'meta:clear-ad_account_id',null,{});
+   });
+   return accountPublic(row,null);
+  }
+  const want=normAct(value)||value;
+  const acc=(meta.ad_accounts||[]).find(a=>a.id===want||a.id===value||a.id==='act_'+String(value).replace(/^act_/,''));
+  if(!acc)fail('That ad account is not on the workspace Meta connection');
+  const taken=(await q('SELECT client_id FROM client_meta_links WHERE ad_account_id=$1 AND client_id<>$2',[acc.id,client.id])).rows[0];
+  if(taken)fail('That ad account is already assigned to another client');
+  next.ad_account_id=acc.id;next.ad_account_name=acc.name;
  }else if(field==='page_id'){
+  if(!next.ad_account_id)fail('Assign a Meta ad account before picking a Page',409);
   const page=(meta.pages||[]).find(p=>p.id===value);
-  if(!page)fail('That Page is not on this Meta connection');
-  meta.page_id=page.id;meta.page_name=page.name;
+  if(!page)fail('That Page is not on the workspace Meta connection');
+  next.page_id=page.id;next.page_name=page.name;
  }else if(field==='whatsapp_phone_id'){
+  if(!next.ad_account_id)fail('Assign a Meta ad account before picking a WhatsApp number',409);
   const phone=(meta.whatsapp_phones||[]).find(p=>p.id===value);
-  if(!phone)fail('That WhatsApp number is not on this Meta connection');
-  meta.whatsapp_phone_id=phone.id;meta.whatsapp_display=phone.display;
+  if(!phone)fail('That WhatsApp number is not on the workspace Meta connection');
+  next.whatsapp_phone_id=phone.id;next.whatsapp_display=phone.display;
  }else fail('Unknown Meta field');
  await tx(async c=>{
-  await c.query('UPDATE connector_accounts SET meta=$2,updated_at=now() WHERE id=$1',[row.id,meta]);
-  await audit(c,user,client.id,'meta:select-'+field,null,{value});
+  await c.query(`INSERT INTO client_meta_links(client_id,ad_account_id,ad_account_name,page_id,page_name,whatsapp_phone_id,whatsapp_display,updated_at)
+   VALUES($1,$2,$3,$4,$5,$6,$7,now())
+   ON CONFLICT(client_id) DO UPDATE SET
+    ad_account_id=excluded.ad_account_id,ad_account_name=excluded.ad_account_name,
+    page_id=excluded.page_id,page_name=excluded.page_name,
+    whatsapp_phone_id=excluded.whatsapp_phone_id,whatsapp_display=excluded.whatsapp_display,
+    updated_at=now()`,
+   [client.id,next.ad_account_id,next.ad_account_name,next.page_id,next.page_name,next.whatsapp_phone_id,next.whatsapp_display]);
+  await audit(c,user,client.id,'meta:select-'+field,null,{value:field==='ad_account_id'?next.ad_account_id:value});
  });
- return accountPublic({...row,meta});
+ return accountPublic(row,next);
 }
 
-export async function disconnectMeta(user,client){
+export async function disconnectMeta(user,_client){
+ const {authorize}=await import('../auth/index.mjs');
+ authorize(user,['admin']);
  await tx(async c=>{
-  await c.query("DELETE FROM connector_accounts WHERE client_id=$1 AND provider='meta'",[client.id]);
-  await audit(c,user,client.id,'meta:disconnected',null,{});
+  await c.query('DELETE FROM client_meta_links');
+  await c.query("DELETE FROM connector_accounts WHERE provider='meta' AND client_id IS NULL");
+  await audit(c,user,null,'meta:disconnected',null,{scope:'workspace'});
  });
  return {ok:true,status:'not_connected'};
 }
 
 export async function metaInsights(client){
- const row=await connectedRow(client.id);
- const ad=row.meta?.ad_account_id;
- if(!ad)fail('Select a Meta ad account first',409);
+ const {row,link}=await connectedForClient(client.id);
+ const ad=link.ad_account_id;
  const token=await tokenFor(row);
  const data=await graph('GET','/'+actId(ad)+'/insights',{token,query:{fields:'impressions,clicks,spend,ctr,reach,cpc,cpm,actions',date_preset:'last_7d',level:'account'}});
  const row0=(data.data||[])[0]||{};
@@ -246,14 +291,14 @@ export async function metaInsights(client){
  const map={impressions:'impressions',clicks:'clicks',spend:'spend',reach:'reach'};
  for(const [k,metric] of Object.entries(map)){
   if(row0[k]===undefined)continue;
-  metrics.push({metric,value:Number(row0[k])||0,label:'real',source:'Meta Ads',date,campaign:row.meta.ad_account_name||ad});
+  metrics.push({metric,value:Number(row0[k])||0,label:'real',source:'Meta Ads',date,campaign:link.ad_account_name||ad});
  }
  return {insights:row0,metrics,ad_account_id:ad};
 }
 
 export async function refreshExpiringTokens(){
  if(!metaConfigured())return {refreshed:0};
- const due=(await q("SELECT * FROM connector_accounts WHERE provider='meta' AND status='connected' AND token_enc IS NOT NULL AND token_expires_at<now()+interval '10 days'")).rows;
+ const due=(await q("SELECT * FROM connector_accounts WHERE provider='meta' AND client_id IS NULL AND status='connected' AND token_enc IS NOT NULL AND token_expires_at<now()+interval '10 days'")).rows;
  let refreshed=0;
  for(const row of due){
   try{
@@ -319,11 +364,8 @@ export async function executeMeta(target){
  if(target.data?.platform&&target.data.platform!=='Meta'){
   const e=new Error('CONNECTOR_NOT_CONFIGURED: external publishing is deferred. No action was sent.');throw e;
  }
- const row=await connectedRow(target.client_id);
- const adAccount=row.meta?.ad_account_id;
- if(!adAccount){
-  const e=new Error('META_ACCOUNT_REQUIRED: Select a Meta ad account before launching.');e.status=409;throw e;
- }
+ const {row,link}=await connectedForClient(target.client_id);
+ const adAccount=link.ad_account_id;
  const token=await tokenFor(row);
  const act=actId(adAccount);
  const action=target.data.action||'launch';
@@ -349,7 +391,7 @@ export async function executeMeta(target){
   targeting,status:'ACTIVE',start_time:new Date().toISOString(),
  }});
  const ids={campaign_id:campaign.id,adset_id:adset.id,status:'ACTIVE'};
- const pageId=row.meta?.page_id;
+ const pageId=link.page_id;
  const file=await creativeBytes(target).catch(()=>null);
  if(file&&pageId){
   const uploaded=await uploadCreative(token,adAccount,file);
@@ -367,12 +409,17 @@ export async function executeMeta(target){
 }
 
 export async function executeWhatsApp(target){
- const row=await connectedRow(target.client_id).catch(e=>{
-  if(String(e.message).startsWith('META_NOT_CONNECTED')){const x=new Error('WHATSAPP_NOT_CONNECTED: Connect Meta and pick a WhatsApp number first.');x.status=409;throw x;}
+ let row,link;
+ try{
+  ({row,link}=await connectedForClient(target.client_id));
+ }catch(e){
+  if(String(e.message).startsWith('META_NOT_CONNECTED')||String(e.message).startsWith('META_ACCOUNT_REQUIRED')){
+   const x=new Error('WHATSAPP_NOT_CONNECTED: Connect Meta, assign an ad account, and pick a WhatsApp number first.');x.status=409;throw x;
+  }
   throw e;
- });
- const phone=row.meta?.whatsapp_phone_id||process.env.META_WHATSAPP_PHONE_ID||'';
- if(!phone){const e=new Error('WHATSAPP_NOT_CONNECTED: Pick a WhatsApp Business number on the connected Meta account.');e.status=409;throw e;}
+ }
+ const phone=link.whatsapp_phone_id||process.env.META_WHATSAPP_PHONE_ID||'';
+ if(!phone){const e=new Error('WHATSAPP_NOT_CONNECTED: Pick a WhatsApp Business number for this client.');e.status=409;throw e;}
  const to=String(target.data.to||'').replace(/\D/g,'');
  if(to.length<10)throw new Error('WHATSAPP_NOT_CONNECTED: This post has no recipient number.');
  const asset=target.data.asset_id?(await q('SELECT * FROM records WHERE id=$1 AND client_id=$2',[target.data.asset_id,target.client_id])).rows[0]:null;

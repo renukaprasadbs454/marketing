@@ -49,7 +49,7 @@ export async function deleteClient(user,client,confirmName){
       await c.query('DELETE FROM agent_messages WHERE thread_id IN (SELECT id FROM agent_threads WHERE client_id=$1)',[nid]);
       await c.query('DELETE FROM agent_threads WHERE client_id=$1',[nid]);
       await c.query("SELECT set_config('exora.purge_client',$1,true)",[nid]);
-      for(const t of ['connector_events','connector_accounts','tool_runs','jobs','runs','files','records','audit','memberships'])await c.query(`DELETE FROM ${t} WHERE client_id=$1`,[nid]);
+      for(const t of ['connector_events','client_meta_links','tool_runs','jobs','runs','files','records','audit','memberships'])await c.query(`DELETE FROM ${t} WHERE client_id=$1`,[nid]);
       await c.query('DELETE FROM clients WHERE id=$1',[nid]);
     }
     // one line of history remains, with no client data in it: who deleted which client ids, when, and how much

@@ -2,6 +2,18 @@ import {choice,noul,TypeSafeClient} from '@typesafe-ai/sdk';
 import {GROUPS,draftStepOptions} from './catalog.mjs';
 import {openrouterChat,openrouterKey,openrouterModel,parseModelJson,routeAnswers,routePrompt} from './openrouter.mjs';
 import {wantsGuidance} from './guide.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {runClaude} from '../runtime/claude-cli.mjs';
+
+export async function claudeRoute(state,questions,runner=runClaude){
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'exora-route-'));
+ try{
+  const text=await runner(routePrompt(state,questions),{talk:true,model:process.env.EXORA_ROUTER_MODEL||'haiku',cwd:dir,timeoutMs:90000});
+  return routeAnswers(questions,parseModelJson(text));
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+}
 
 export const MIN_CONFIDENCE=0.7;
 export const MIN_MARGIN=0.15;
@@ -96,6 +108,10 @@ function toSdk(questions){
 
 export async function askJev(state,questions){
  if(stub)return stub(state,questions);
+ if(process.env.EXORA_ROUTER_PROVIDER==='claude'){
+  try{return await claudeRoute(state,questions);}
+  catch(e){console.error('[EXORA Claude routing]',e.message);throw new RoutingUnavailable('Claude routing is unavailable. Check the Claude connection in Settings. The steps on the left still work.');}
+ }
  if(openrouterKey()){
   try{
    const text=await openrouterChat({model:openrouterModel('route'),prompt:routePrompt(state,questions),timeoutMs:25000});

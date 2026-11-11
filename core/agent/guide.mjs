@@ -61,7 +61,7 @@ export function nextActions(client,user,tools,missing,extra={}){
  else if(missing==='visuals')pick('make_visual','Next: Make a visual',{type:'image',format:'square'},'Make a square post visual');
  else if(missing==='review')pick('send_for_review','Next: Send something to Review',{});
  else if(missing==='posting request'){
-  pick('connect_meta','Connect Meta Ads',{},'Connect Meta Ads for this client');
+  pick('connect_meta','Connect Meta Ads',{},'Connect Meta Ads for the workspace');
   pick('plan_post','Next: Plan a post',{platform:'Instagram'},'Plan an Instagram post');
  }
  else if(missing==='numbers')pick('add_number','Next: Add results',{metric:'leads'},'Add a lead number');

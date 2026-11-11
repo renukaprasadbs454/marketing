@@ -162,7 +162,7 @@ export async function execute(tool,raw,ctx){
   case 'schedule':return call(user,client,{action:'schedule',asset_id:args.asset_id,platform:args.platform,scheduled_at:args.scheduled_at,to:args.to});
   case 'ad-action':return call(user,client,{action:'ad-action',platform:args.platform,operation:args.operation,title:args.title,budget:Number(args.budget),asset_id:args.asset_id||null});
   case 'meta-status':{const {liveConnectors}=await import('../connectors/index.mjs');return {connectors:await liveConnectors(client.id)};}
-  case 'connect-meta':{const {metaConfigured}=await import('../connectors/index.mjs');if(!metaConfigured())fail('Meta app credentials are not set on the server',503);return {url:'/api/auth/meta/start?client='+client.id,redirect:true};}
+  case 'connect-meta':{const {metaConfigured}=await import('../connectors/index.mjs');if(!metaConfigured())fail('Meta app credentials are not set on the server',503);return {url:'/api/auth/meta/start',redirect:true};}
   case 'select-meta-account':return call(user,client,{action:'select-meta-account',ad_account_id:args.ad_account_id});
   case 'pull-meta-insights':return call(user,client,{action:'pull-meta-insights'});
   case 'import-csv':{

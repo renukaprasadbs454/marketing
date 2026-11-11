@@ -29,6 +29,7 @@ services:
       META_REDIRECT_URI: ${META_REDIRECT_URI:-https://marketing.exora.solutions/api/auth/meta/callback}
     volumes:
       - ./data/local:/app/.local
+      - claude_home:/root
     ports:
       - "127.0.0.1:${MARKETING_HOST_PORT:-8108}:3100"
     depends_on:
@@ -48,6 +49,7 @@ services:
       NODE_ENV: production
     volumes:
       - ./data/local:/app/.local
+      - claude_home:/root
     entrypoint: ["docker-entrypoint.sh"]
     command: ["node", "scripts/worker.mjs"]
     depends_on:
@@ -63,3 +65,4 @@ services:
 
 volumes:
   marketing_pg:
+  claude_home:

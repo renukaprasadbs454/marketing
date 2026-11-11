@@ -1,8 +1,7 @@
-import {q} from '../db/index.mjs';
-import {accountPublic,executeMeta,executeWhatsApp,metaConfigured} from './meta.mjs';
+import {accountPublic,clientMetaLink,executeMeta,executeWhatsApp,globalMetaRow,metaConfigured} from './meta.mjs';
 
 export const connectors=[
-{id:'meta',name:'Meta Ads',category:'Advertising',description:'Campaigns, ad sets, budgets and performance',permissions:'Read + write',status:'not_connected'},
+{id:'meta',name:'Meta Ads',category:'Advertising',description:'Workspace Meta login. Assign one ad account per client.',permissions:'Read + write',status:'not_connected'},
 {id:'google-ads',name:'Google Ads',category:'Advertising',description:'Search, display and YouTube campaigns',permissions:'Read + write',status:'not_connected'},
 {id:'instagram',name:'Instagram',category:'Publishing',description:'Reels, carousels, comments and messages',permissions:'Read + write',status:'not_connected'},
 {id:'facebook',name:'Facebook',category:'Publishing',description:'Pages, posts and community replies',permissions:'Read + write',status:'not_connected'},
@@ -12,14 +11,31 @@ export const connectors=[
 {id:'gsc',name:'Search Console',category:'Measurement',description:'Queries, pages and search visibility',permissions:'Read only',status:'not_connected'},
 {id:'cms',name:'Website / CMS',category:'Publishing',description:'Approved articles and landing pages',permissions:'Write',status:'not_connected'}];
 
+function metaDetail(meta){
+ if(!metaConfigured())return 'Set META_APP_ID on the server';
+ if(meta.status==='pending')return 'Waiting for Meta approval';
+ if(meta.status==='expired')return 'Reconnect Meta in Settings';
+ if(meta.status==='connected'){
+  if(meta.ad_account_name)return meta.ad_account_name;
+  return 'Workspace connected — assign an ad account to this client';
+ }
+ return 'Connect Meta once for the workspace, then assign an ad account per client';
+}
+
 export async function connectorStatuses(clientId){
- if(!clientId)return {};
- const row=(await q("SELECT * FROM connector_accounts WHERE client_id=$1 AND provider='meta'",[clientId])).rows[0];
- const meta=accountPublic(row);
- const waConnected=!!meta.whatsapp_phone_id&&meta.status==='connected';
+ const row=await globalMetaRow();
+ const link=clientId?await clientMetaLink(clientId):null;
+ const meta=accountPublic(row,link);
+ const waConnected=!!meta.whatsapp_phone_id&&meta.status==='connected'&&meta.assigned;
  return {
-  meta:{...meta,configured:metaConfigured(),detail:meta.status==='connected'?(meta.ad_account_name||'Connected, pick an ad account'):meta.status==='pending'?'Waiting for Meta approval':meta.status==='expired'?'Reconnect Meta':metaConfigured()?'Not connected':'Set META_APP_ID on the server'},
-  whatsapp:{status:waConnected?'connected':meta.status==='connected'?'not_connected':'not_connected',whatsapp_phone_id:meta.whatsapp_phone_id,whatsapp_display:meta.whatsapp_display,whatsapp_phones:meta.whatsapp_phones,detail:waConnected?(meta.whatsapp_display||'Connected'):meta.status==='connected'?'Pick a WhatsApp number on the Meta connection':'Connect Meta Ads first'},
+  meta:{...meta,configured:metaConfigured(),detail:metaDetail(meta)},
+  whatsapp:{
+   status:waConnected?'connected':meta.status==='connected'?'not_connected':'not_connected',
+   whatsapp_phone_id:meta.whatsapp_phone_id,
+   whatsapp_display:meta.whatsapp_display,
+   whatsapp_phones:meta.whatsapp_phones,
+   detail:waConnected?(meta.whatsapp_display||'Connected'):meta.status==='connected'?(meta.assigned?'Pick a WhatsApp number for this client':'Assign a Meta ad account first'):'Connect Meta Ads in Settings first',
+  },
  };
 }
 
@@ -35,7 +51,7 @@ export async function liveConnectors(clientId){
 
 function pickPublic(rest){
  const out={};
- for(const k of ['ad_account_id','ad_account_name','ad_accounts','page_id','page_name','pages','whatsapp_phone_id','whatsapp_display','whatsapp_phones','token_expires_at','configured','updated_at'])if(rest[k]!==undefined)out[k]=rest[k];
+ for(const k of ['ad_account_id','ad_account_name','ad_accounts','page_id','page_name','pages','whatsapp_phone_id','whatsapp_display','whatsapp_phones','token_expires_at','configured','updated_at','workspace','assigned'])if(rest[k]!==undefined)out[k]=rest[k];
  return out;
 }
 

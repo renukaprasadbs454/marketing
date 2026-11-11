@@ -49,8 +49,8 @@ test('Sign in and create a Meta test client',async()=>{
  client=r.data.id;
 });
 
-test('OAuth start redirects to Facebook Login for Business',async()=>{
- const r=await request('auth/meta/start?client='+client,undefined,cookie);
+test('OAuth start is workspace-scoped and does not need a client',async()=>{
+ const r=await request('auth/meta/start',undefined,cookie);
  assert.equal(r.status,302);
  const loc=r.headers.get('location')||'';
  assert.match(loc,/facebook\.com\/.*dialog\/oauth/);
@@ -58,14 +58,15 @@ test('OAuth start redirects to Facebook Login for Business',async()=>{
  assert.match(loc,/ads_management/);
  assert.match(loc,/business_management/);
  assert.doesNotMatch(loc,/client_secret|APP_SECRET|token_enc/i);
- const row=(await q("SELECT oauth_state,status,token_enc FROM connector_accounts WHERE client_id=$1 AND provider='meta'",[client])).rows[0];
+ const row=(await q("SELECT oauth_state,status,token_enc,client_id FROM connector_accounts WHERE provider='meta' AND client_id IS NULL")).rows[0];
  assert.equal(row.status,'pending');
  assert.ok(row.oauth_state);
  assert.equal(row.token_enc,null);
+ assert.equal(row.client_id,null);
 });
 
 test('OAuth start requires a session',async()=>{
- const r=await request('auth/meta/start?client='+client,undefined,'');
+ const r=await request('auth/meta/start',undefined,'');
  assert.equal(r.status,401);
 });
 
@@ -77,13 +78,13 @@ test('OAuth callback rejects a bad state without calling Graph',async()=>{
  assert.equal(called,0);
 });
 
-test('OAuth callback stores an encrypted long-lived token',async()=>{
- const state=(await q("SELECT oauth_state FROM connector_accounts WHERE client_id=$1",[client])).rows[0].oauth_state;
+test('OAuth callback stores an encrypted long-lived workspace token',async()=>{
+ const state=(await q("SELECT oauth_state FROM connector_accounts WHERE provider='meta' AND client_id IS NULL")).rows[0].oauth_state;
  setMetaFetch(async(url)=>{
   const u=String(url);
   if(u.includes('oauth/access_token')&&u.includes('code='))return jsonRes({access_token:'SHORT',expires_in:3600});
   if(u.includes('fb_exchange_token'))return jsonRes({access_token:'LONG_LIVED_TOKEN',expires_in:5184000});
-  if(u.includes('/me/adaccounts'))return jsonRes({data:[{id:'act_111',name:'Clinic Ads',currency:'INR',account_status:1}]});
+  if(u.includes('/me/adaccounts'))return jsonRes({data:[{id:'act_111',name:'Clinic Ads',currency:'INR',account_status:1},{id:'act_222',name:'Other Ads',currency:'INR',account_status:1}]});
   if(u.includes('/me/accounts'))return jsonRes({data:[{id:'page_1',name:'Clinic Page'}]});
   if(u.includes('/me/businesses'))return jsonRes({data:[]});
   return jsonRes({data:[]});
@@ -91,16 +92,31 @@ test('OAuth callback stores an encrypted long-lived token',async()=>{
  const r=await request('auth/meta/callback?code=ok&state='+state,undefined,'');
  assert.equal(r.status,302);
  assert.match(r.headers.get('location')||'',/meta=connected/);
- const row=(await q("SELECT status,token_enc,meta FROM connector_accounts WHERE client_id=$1",[client])).rows[0];
+ const row=(await q("SELECT status,token_enc,meta,client_id FROM connector_accounts WHERE provider='meta' AND client_id IS NULL")).rows[0];
  assert.equal(row.status,'connected');
+ assert.equal(row.client_id,null);
  assert.ok(row.token_enc);
  assert.notEqual(row.token_enc,'LONG_LIVED_TOKEN');
  assert.equal(decryptSecret(row.token_enc),'LONG_LIVED_TOKEN');
- assert.equal(row.meta.ad_account_id,'act_111');
- assert.equal(row.meta.page_id,'page_1');
+ assert.equal(row.meta.ad_account_id,undefined);
+ assert.equal(row.meta.ad_accounts.length,2);
 });
 
-test('Bootstrap never exposes tokens or the app secret',async()=>{
+test('Bootstrap never exposes tokens; assignment is per client',async()=>{
+ const bare=await request('bootstrap');
+ assert.equal(bare.status,200);
+ const bareMeta=bare.data.connectors.find(c=>c.id==='meta');
+ assert.equal(bareMeta.status,'connected');
+ assert.equal(bareMeta.ad_account_id,null);
+ assert.equal(bareMeta.workspace,true);
+
+ const assign=await request('action',{client_id:client,action:'select-meta-account',ad_account_id:'act_111'});
+ assert.equal(assign.status,200,JSON.stringify(assign.data));
+ assert.equal(assign.data.ad_account_id,'act_111');
+
+ const page=await request('action',{client_id:client,action:'select-meta-page',page_id:'page_1'});
+ assert.equal(page.status,200,JSON.stringify(page.data));
+
  const r=await request('bootstrap?client='+client);
  assert.equal(r.status,200);
  const raw=JSON.stringify(r.data);
@@ -110,7 +126,20 @@ test('Bootstrap never exposes tokens or the app secret',async()=>{
  const meta=r.data.connectors.find(c=>c.id==='meta');
  assert.equal(meta.status,'connected');
  assert.equal(meta.ad_account_id,'act_111');
+ assert.equal(meta.page_id,'page_1');
  assert.equal(r.data.capabilities.meta,true);
+
+ const link=(await q('SELECT * FROM client_meta_links WHERE client_id=$1',[client])).rows[0];
+ assert.equal(link.ad_account_id,'act_111');
+});
+
+test('Ad account cannot be assigned to two clients',async()=>{
+ const other=(await request('action',{action:'create-client',name:'Meta Other '+stamp,industry:'Retail',city:'Mysuru'})).data.id;
+ const r=await request('action',{client_id:other,action:'select-meta-account',ad_account_id:'act_111'});
+ assert.equal(r.status,400);
+ assert.match(String(r.data.error||''),/already assigned/i);
+ const ok=await request('action',{client_id:other,action:'select-meta-account',ad_account_id:'act_222'});
+ assert.equal(ok.status,200,JSON.stringify(ok.data));
 });
 
 test('Google Ads still refuses to send anything',async()=>{
@@ -134,9 +163,9 @@ test('Approved Meta launch creates a campaign through Graph',async()=>{
  assert.ok(calls.some(c=>c.u.includes('/campaigns')));
 });
 
-test('Meta launch without a connected account is blocked, not sent',async()=>{
- const other=(await request('action',{action:'create-client',name:'No Meta '+stamp,industry:'Retail',city:'Mysuru'})).data.id;
- await assert.rejects(()=>executeConnector({kind:'Ad',client_id:other,title:'x',data:{platform:'Meta',action:'launch',budget:500}}),/META_NOT_CONNECTED/);
+test('Meta launch without an assigned ad account is blocked, not sent',async()=>{
+ const other=(await request('action',{action:'create-client',name:'No Meta '+stamp,industry:'Retail',city:'Hubli'})).data.id;
+ await assert.rejects(()=>executeConnector({kind:'Ad',client_id:other,title:'x',data:{platform:'Meta',action:'launch',budget:500}}),/META_ACCOUNT_REQUIRED|META_NOT_CONNECTED/);
 });
 
 test('Webhook verify challenge and signed payload',async()=>{
@@ -152,14 +181,14 @@ test('Webhook verify challenge and signed payload',async()=>{
 });
 
 test('Token refresh re-encrypts a long-lived token',async()=>{
- await q("UPDATE connector_accounts SET token_expires_at=now()+interval '2 days' WHERE client_id=$1",[client]);
+ await q("UPDATE connector_accounts SET token_expires_at=now()+interval '2 days' WHERE provider='meta' AND client_id IS NULL");
  setMetaFetch(async(url)=>{
   if(String(url).includes('fb_exchange_token'))return jsonRes({access_token:'REFRESHED_TOKEN',expires_in:5184000});
   return jsonRes({});
  });
  const out=await refreshExpiringTokens();
  assert.ok(out.refreshed>=1);
- const row=(await q("SELECT token_enc FROM connector_accounts WHERE client_id=$1",[client])).rows[0];
+ const row=(await q("SELECT token_enc FROM connector_accounts WHERE provider='meta' AND client_id IS NULL")).rows[0];
  assert.equal(decryptSecret(row.token_enc),'REFRESHED_TOKEN');
 });
 
