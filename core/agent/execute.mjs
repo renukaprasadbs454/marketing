@@ -11,7 +11,6 @@ import {parseMetricsCsv} from './csv.mjs';
 import {missingStep} from './context.mjs';
 import {brandBody,companyBody,productBody} from './intake.mjs';
 import {isStrategyDraft,nextStrategyField,strategyBrief,strategyInputs} from './strategy-fields.mjs';
-import {monthInputs} from './month-fields.mjs';
 import {questionnaireText,readyCheck,PACKAGES} from '../solo/index.mjs';
 
 const UUID=/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
@@ -78,10 +77,6 @@ export async function execute(tool,raw,ctx){
   case 'apply-package':{
    if(!PACKAGES[args.package_id])fail('Unknown package');
    return call(user,client,{action:'apply-package',package_id:args.package_id});
-  }
-  case 'produce-month':{
-   const data=await call(user,client,{action:'produce-month',...monthInputs(args),language:args.language||client.languages?.[0]||'English'});
-   return {...data,rows:[{id:data.job_id,kind:'Job',title:'Month production',status:'queued',type:'month'}]};
   }
   case 'record-client-decision':return call(user,client,{action:'record-client-decision',id:args.id,decision:args.decision,note:args.note||''});
   case 'month-pack':return call(user,client,{action:'month-pack',job_id:args.id||null});

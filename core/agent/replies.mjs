@@ -32,10 +32,9 @@ export function resultText(tool,result,client){
  if(tool.id==='ready_check'){
   const r=result.ready||{};
   const missing=(r.items||[]).filter(i=>!i.ok).map(i=>'• '+i.label+(i.detail?' — '+i.detail:'')).join('\n');
-  return `${name} is ${r.pct||0}% ready (${r.ready||0}/${r.total||0}).${missing?'\nStill needed:\n'+missing:''}${r.canProduce?'\nStrategy and brand are in place — you can produce the month.':''}`;
+  return `${name} is ${r.pct||0}% ready (${r.ready||0}/${r.total||0}).${missing?'\nStill needed:\n'+missing:''}${r.canProduce?'\nStrategy and brand are in place — produce the month from Calendar & budget.':''}`;
  }
  if(tool.id==='client_questionnaire')return result.text||'Questionnaire ready to copy.';
- if(tool.id==='draft_month')return result.job_id?`Monthly production queued (job ${result.job_id}). Watch the live window. Review will show calendar, hooks, scripts, designs, ads and SEO.`:'Queued.';
  if(tool.id==='month_pack')return result.zip?'Delivery pack is ready to download.':'Pack folder written under .local/packs.';
  if(tool.id==='record_client_decision')return `Recorded client decision: ${result.decision||'saved'}.`;
  if(tool.id==='apply_package')return `Package applied: ${result.package?.label||'saved'}.`;

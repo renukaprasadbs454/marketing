@@ -53,8 +53,7 @@ export function nextActions(client,user,tools,missing,extra={}){
   pick('set_brand_kit','Build brand kit from files',{},'Build the brand kit from uploaded brand files');
  }else if(missing==='strategy')pick('draft','Next: Draft strategy',{step:'strategy'},'Draft the marketing strategy');
  else if(missing==='monthly plan'){
-  pick('draft_month','Next: Produce the whole month',{},'Produce this month: ask me how many posts and reels');
-  pick('draft','Or draft only the calendar',{step:'plan'},'Draft the monthly content plan');
+  pick('draft','Draft the monthly calendar',{step:'plan'},'Draft the monthly content plan');
  }
  else if(missing==='hooks')pick('draft','Next: Suggest hooks',{step:'hooks'},'Draft hook ideas');
  else if(missing==='writing')pick('draft','Next: Draft writing',{step:'writing'},'Draft a caption or script');

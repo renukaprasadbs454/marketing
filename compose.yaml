@@ -19,7 +19,10 @@ services:
     restart: unless-stopped
 
   web:
-    build: .
+    build:
+      context: .
+      entitlements:
+        - network.host
     image: exora-marketing:latest
     env_file: .env
     environment:
@@ -52,6 +55,14 @@ services:
       - claude_home:/root
     entrypoint: ["docker-entrypoint.sh"]
     command: ["node", "scripts/worker.mjs"]
+    # The image's default healthcheck probes the web server on port 3100.
+    # The worker has no HTTP listener; check its database heartbeat instead.
+    healthcheck:
+      test: ["CMD", "node", "-e", "import('pg').then(async ({default:pg})=>{const p=new pg.Pool({connectionString:process.env.DATABASE_URL});try{const r=await p.query(\"SELECT 1 FROM service_heartbeats WHERE service='worker' AND status='online' AND updated_at>now()-interval '15 seconds'\");await p.end();process.exit(r.rowCount===1?0:1)}catch(e){await p.end().catch(()=>{});process.exit(1)}}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy

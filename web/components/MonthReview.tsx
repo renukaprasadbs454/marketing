@@ -19,7 +19,7 @@ function Status({value}:{value:string}){return <span className={`status ${value}
 function Empty({title,children,action}:any){return <div className="empty"><h3>{title}</h3><p>{children}</p>{action}</div>}
 function Rich({text}:any){return <div className="rich">{String(text||'').split('\n').map((line:string,i:number)=>line.startsWith('## ')?<h3 key={i}>{line.slice(3)}</h3>:line.startsWith('# ')?<h2 key={i}>{line.slice(2)}</h2>:line?<p key={i}>{line}</p>:<br key={i}/>)}</div>}
 
-export default function MonthReview({data,canEdit,busy,onProduce,onView,onAct,onChooseHook,Creative}:any){
+export default function MonthReview({data,canEdit,busy,onView,onAct,onChooseHook,Creative}:any){
  const records=data?.records||[],jobs=(data?.jobs||[]).filter((j:any)=>j.type==='month');
  const [jobId,setJobId]=useState(jobs[0]?.id||'');
  const [tab,setTab]=useState<(typeof TABS)[number]['id']>('calendar');
@@ -35,7 +35,7 @@ export default function MonthReview({data,canEdit,busy,onProduce,onView,onAct,on
  const inputs=job?.payload?.inputs||{};
  const counts={calendar:campaign?.data?.slots?.length||0,hooks:ideas.length,scripts:copies.length,designs:visuals.length,ads:ads.length,seo:seo.length};
  const brand=records.find((r:any)=>r.kind==='BrandKit');
- if(!jobs.length)return <Empty title="No monthly run yet" action={canEdit&&<button className="button primary" onClick={onProduce}><Plus size={16}/>Produce this month</button>}>Ask how many posts, reels, carousels and ads, then produce the calendar, hooks, scripts, designs, ads and SEO in one run.</Empty>;
+ if(!jobs.length)return <Empty title="No monthly run yet">Start production from Calendar &amp; budget. This page shows the calendar, hooks, scripts, designs, ads and SEO for each run.</Empty>;
  return <>
   <div className="section-title">
    <div className="month-control">
@@ -45,7 +45,6 @@ export default function MonthReview({data,canEdit,busy,onProduce,onView,onAct,on
     <Status value={job.status}/>
    </div>
    <div className="action-row">
-    {canEdit&&<button className="button" disabled={busy} onClick={onProduce}><Plus size={16}/>Produce another month</button>}
     <button className="button primary" disabled={busy} onClick={()=>onAct({action:'month-pack',job_id:job.id},'Delivery pack ready').then((r:any)=>{if(r?.download)location.href=r.download;})}><Download size={16}/>Delivery pack</button>
    </div>
   </div>

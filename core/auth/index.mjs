@@ -8,6 +8,12 @@ export async function access(user,client){if(!client||!/^[0-9a-f-]{36}$/i.test(c
 export function sameOrigin(request){
  const origin=request.headers.get('origin');
  const allowed=new Set(['http://127.0.0.1:3100','http://localhost:3100',new URL(request.url).origin]);
+ // In Docker and reverse-proxy setups request.url can contain the internal service
+ // origin (for example http://web:3100). Also trust the exact externally addressed
+ // host/scheme supplied with this request so the local browser origin remains valid.
+ const host=(request.headers.get('x-forwarded-host')||request.headers.get('host')||'').split(',')[0].trim();
+ const protocol=(request.headers.get('x-forwarded-proto')||new URL(request.url).protocol.replace(/:$/,'')).split(',')[0].trim();
+ if(host&&['http','https'].includes(protocol))allowed.add(`${protocol}://${host}`);
  if(process.env.EXORA_PUBLIC_ORIGIN)allowed.add(process.env.EXORA_PUBLIC_ORIGIN.replace(/\/$/,''));
  for(const o of String(process.env.EXORA_ALLOWED_ORIGINS||'').split(',').map(s=>s.trim()).filter(Boolean))allowed.add(o.replace(/\/$/,''));
  if(origin&&!allowed.has(origin))fail('Cross-origin writes are blocked',403);

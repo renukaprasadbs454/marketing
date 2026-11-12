@@ -4,6 +4,7 @@ import {generate} from './index.mjs';
 import {createProgress} from './progress.mjs';
 import {claudeState} from './claude-cli.mjs';
 import {monthBrief,buildSlots,visualFor,contentSkill} from '../agent/month-fields.mjs';
+import {chooseDesignTemplate,templateForDesign} from '../design/templates.mjs';
 
 export const MONTH_STAGES=[
  {key:'calendar',label:'Calendar, budget, UTMs',module:'03-plan',skills:['campaign-plan','content-calendar','utm-campaign-plan']},
@@ -82,10 +83,11 @@ export async function runMonthJob(job){
      const brand=(await contextRecords(client)).find(r=>r.kind==='BrandKit')?.data||{};
      for(const copy of copies){
       const vis=visualFor(copy.data.slot_format||copy.data.format);
+      const designTemplate=await templateForDesign(await chooseDesignTemplate(client,null,vis.type));
       const aid=id();
-      await q("INSERT INTO records(id,client_id,kind,title,status,data,created_by) VALUES($1,$2,'Asset',$3,'draft',$4,$5)",[aid,client.id,copy.title+' · '+vis.type,{...copy.data,type:vis.type,format:vis.format,source_asset_id:copy.id,files:[],render_status:'queued',month_job:job.id,checks:copy.data.checks||[]},user.id]);
+      await q("INSERT INTO records(id,client_id,kind,title,status,data,created_by) VALUES($1,$2,'Asset',$3,'draft',$4,$5)",[aid,client.id,copy.title+' · '+vis.type,{...copy.data,type:vis.type,format:vis.format,design_template_id:designTemplate?.id||null,design_template_name:designTemplate?.title||null,source_asset_id:copy.id,files:[],render_status:'queued',month_job:job.id,checks:copy.data.checks||[]},user.id]);
       const jid=id();
-      await q("INSERT INTO jobs(id,client_id,type,payload,created_by) VALUES($1,$2,'render',$3,$4)",[jid,client.id,{asset_id:aid,brand,client_name:client.brand_name||client.name,languages:client.languages||[],layout:null,composer:prov==='claude'?'claude':'template'},user.id]);
+      await q("INSERT INTO jobs(id,client_id,type,payload,created_by) VALUES($1,$2,'render',$3,$4)",[jid,client.id,{asset_id:aid,brand,client_name:client.brand_name||client.name,languages:client.languages||[],layout:null,design_template:designTemplate?{title:designTemplate.title,data:designTemplate.data,source_name:designTemplate.source_name,reference_image_path:designTemplate.reference_image_path}:null,composer:prov==='claude'?'claude':'template'},user.id]);
       queued.push({asset_id:aid,job_id:jid});
      }
      results.designs={done:true,queued};

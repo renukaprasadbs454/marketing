@@ -38,7 +38,7 @@ export function parseQuestionnaire(text){
 export async function readyCheck(client){
  const records=await contextRecords(client);
  const pkg=client.settings?.package||null;
- const strategy=records.find(r=>r.kind==='Strategy');
+ const strategy=records.find(r=>r.kind==='Strategy'&&!['archived','rejected'].includes(r.status)&&(r.status==='approved'||r.data?.validation_status==='confirmed'))||records.find(r=>r.kind==='Strategy'&&!['archived','rejected'].includes(r.status));
  const items=[
   {key:'company',label:'Company details',ok:!!(client.name&&client.industry&&client.city),detail:[client.name,client.industry,client.city].filter(Boolean).join(' · ')},
   {key:'questionnaire',label:'Client answers',ok:!!client.data?.questionnaire,detail:client.data?.approval_contact?('Approver: '+client.data.approval_contact):'Paste the WhatsApp reply'},

@@ -1,5 +1,5 @@
 # EXORA Marketing OS — production image (Next.js + worker + Playwright renders)
-FROM node:20-bookworm-slim AS build
+FROM node:22-bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -9,10 +9,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build && npm prune --omit=dev \
     && npm cache clean --force && rm -rf web/.next/cache
 
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl ffmpeg python3 python3-pip \
-    libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libasound2 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+    libnss3 libcups2 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libasound2 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
     && bash /tmp/install-claude.sh stable \
@@ -26,7 +26,7 @@ ENV PYTHONPATH=/opt/exora-python
 RUN python3 -m pip install --no-cache-dir --target /opt/exora-python \
     'pypdf>=6,<7' 'Pillow>=12,<13'
 COPY --from=build /app /app
-RUN npx playwright install chromium
+RUN --network=host npx playwright install chromium
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 EXPOSE 3100
